@@ -1,4 +1,4 @@
-package main
+package checkhttp
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
+	"net/http/httputil"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,12 +20,14 @@ import (
 	"github.com/jessevdk/go-flags"
 )
 
-var version string
+const version = "0.020"
 
-const UNKNOWN = 3
-const CRITICAL = 2
-const WARNING = 1
-const OK = 0
+const (
+	UNKNOWN  = 3
+	CRITICAL = 2
+	WARNING  = 1
+	OK       = 0
+)
 
 type commandOpts struct {
 	Timeout       time.Duration `long:"timeout" default:"10s" description:"Timeout to wait for connection"`
@@ -53,7 +55,8 @@ type commandOpts struct {
 	TLSMaxVersion       string        `long:"tls-max" description:"maximum supported TLS version" choice:"1.0" choice:"1.1" choice:"1.2" choice:"1.3"`
 	TCP4                bool          `short:"4" description:"use tcp4 only"`
 	TCP6                bool          `short:"6" description:"use tcp6 only"`
-	Version             bool          `short:"v" long:"version" description:"Show version"`
+	Version             bool          `short:"V" long:"version" description:"Show version"`
+	Verbose             bool          `short:"v" long:"verbose" description:"Show verbose output"`
 	bufferSize          uint64
 	expectByte          []byte
 }
@@ -154,8 +157,8 @@ func expectedStatusCode(opts commandOpts, status string) string {
 	return ""
 }
 
-func printVersion() {
-	fmt.Printf(`%s Compiler: %s %s`,
+func printVersion(output io.Writer) {
+	fmt.Fprintf(output, `%s Compiler: %s %s`,
 		version,
 		runtime.Compiler,
 		runtime.Version())
@@ -216,14 +219,23 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 		}
 	}
 
+	if opts.Verbose {
+		reqDump, _ := httputil.DumpRequest(req, true)
+		log.Printf("request:\n%s", reqDump)
+	}
+
 	start := time.Now()
 	res, err := client.Do(req)
-
 	if err != nil {
 		return "", &reqError{
 			fmt.Sprintf("HTTP CRITICAL - Error in request: %v", err),
 			CRITICAL,
 		}
+	}
+
+	if opts.Verbose {
+		resDump, _ := httputil.DumpResponse(res, true)
+		log.Printf("response:\n%s", resDump)
 	}
 
 	b := &capWriter{
@@ -273,37 +285,33 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 	return okMsg, nil
 }
 
-func main() {
-	os.Exit(_main())
-}
-
-func _main() int {
+func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	opts := commandOpts{}
 	psr := flags.NewParser(&opts, flags.Default)
-	_, err := psr.Parse()
+	_, err := psr.ParseArgs(osArgs)
 	if err != nil {
-		os.Exit(UNKNOWN)
+		return UNKNOWN
 	}
 
 	if opts.Version {
-		printVersion()
+		printVersion(output)
 		return OK
 	}
 
 	bufferSize, err := humanize.ParseBytes(opts.MaxBufferSize)
 	if err != nil {
-		fmt.Printf("Could not parse max-buffer-size: %v\n", err)
+		fmt.Fprintf(output, "Could not parse max-buffer-size: %v\n", err)
 		return UNKNOWN
 	}
 	opts.bufferSize = bufferSize
 
 	if opts.WaitFor && opts.WaitForMax == 0 {
-		fmt.Printf("wait-for-max is required when wait-for is enabled\n")
+		fmt.Fprintf(output, "wait-for-max is required when wait-for is enabled\n")
 		return UNKNOWN
 	}
 
 	if opts.ExpectContent != "" && opts.Base64ExpectContent != "" {
-		fmt.Printf("Both string and base64-string are specified\n")
+		fmt.Fprintf(output, "Both string and base64-string are specified\n")
 		return UNKNOWN
 	}
 
@@ -313,24 +321,24 @@ func _main() int {
 	if opts.Base64ExpectContent != "" {
 		data, err := base64.StdEncoding.DecodeString(opts.Base64ExpectContent)
 		if err != nil {
-			fmt.Printf("Failed decode base64-string: %v\n", err)
+			fmt.Fprintf(output, "Failed decode base64-string: %v\n", err)
 			return UNKNOWN
 		}
 		opts.expectByte = data
 	}
 
 	if opts.TCP4 && opts.TCP6 {
-		fmt.Printf("Both tcp4 and tcp6 are specified\n")
+		fmt.Fprintf(output, "Both tcp4 and tcp6 are specified\n")
 		return UNKNOWN
 	}
 
 	if opts.SNI && opts.Hostname == "" {
-		fmt.Printf("hostname is required when use sni\n")
+		fmt.Fprintf(output, "hostname is required when use sni\n")
 		return UNKNOWN
 	}
 
 	if opts.Hostname == "" && opts.IPAddress == "" {
-		fmt.Printf("Specify either hostname or ipaddress\n")
+		fmt.Fprintf(output, "Specify either hostname or ipaddress\n")
 		return UNKNOWN
 	}
 
@@ -377,7 +385,6 @@ func _main() int {
 		Timeout: opts.Timeout,
 	}
 
-	ctx := context.Background()
 	timeout := opts.Timeout + 3*time.Second
 	if opts.WaitForMax > 0 {
 		timeout = opts.WaitForMax
@@ -393,23 +400,29 @@ func _main() int {
 			okMsg, reqErr := request(ctx, client, opts)
 			interval := opts.Interim
 			if reqErr == nil && consecutive <= 0 {
-				log.Printf("request[%d]: %s", requestNum, okMsg)
+				if opts.Verbose {
+					log.Printf("request[%d]: %s", requestNum, okMsg)
+				}
 				fmt.Println(okMsg)
 				return OK
 			} else if reqErr == nil {
 				consecutive--
-				log.Printf("request[%d]: %s", requestNum, okMsg)
+				if opts.Verbose {
+					log.Printf("request[%d]: %s", requestNum, okMsg)
+				}
 			} else {
 				interval = opts.WaitForInterval
 				consecutive = opts.Consecutive - 1
-				log.Printf("request[%d]: %s", requestNum, reqErr.Error())
+				if opts.Verbose {
+					log.Printf("request[%d]: %s", requestNum, reqErr.Error())
+				}
 			}
 			select {
 			case <-ctx.Done():
 			case <-time.After(interval):
 			}
 		}
-		fmt.Printf("Give up waiting for success\n")
+		fmt.Fprintf(output, "Give up waiting for success\n")
 		return UNKNOWN
 	}
 
@@ -420,12 +433,16 @@ func _main() int {
 		requestNum++
 		okMsg, reqErr = request(ctx, client, opts)
 		if reqErr == nil && consecutive <= 0 {
-			log.Printf("request[%d]: %s", requestNum, okMsg)
+			if opts.Verbose {
+				log.Printf("request[%d]: %s", requestNum, okMsg)
+			}
 			fmt.Println(okMsg)
 			return OK
 		} else if reqErr == nil {
 			consecutive--
-			log.Printf("request[%d]: %s", requestNum, okMsg)
+			if opts.Verbose {
+				log.Printf("request[%d]: %s", requestNum, okMsg)
+			}
 		} else {
 			break
 		}

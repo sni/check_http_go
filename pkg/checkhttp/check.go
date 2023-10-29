@@ -45,7 +45,7 @@ type commandOpts struct {
 	Port                int           `short:"p" long:"port" description:"Port number"`
 	Method              string        `short:"j" long:"method" default:"GET" description:"Set HTTP Method"`
 	URI                 string        `short:"u" long:"uri" default:"/" description:"URI to request"`
-	Expect              string        `short:"e" long:"expect" default:"HTTP/1.,HTTP/2." description:"Comma-delimited list of expected HTTP response status"`
+	Expect              string        `short:"e" long:"expect" default:"" description:"Comma-delimited list of expected HTTP response status"`
 	ExpectContent       string        `short:"s" long:"string" description:"String to expect in the content"`
 	Base64ExpectContent string        `long:"base64-string" description:"Base64 Encoded string to expect the content"`
 	UserAgent           string        `short:"A" long:"useragent" default:"check_http" description:"UserAgent to be sent"`
@@ -150,7 +150,7 @@ func buildRequest(ctx context.Context, opts commandOpts) (*http.Request, error) 
 func expectedStatusCode(opts commandOpts, status string) string {
 	expects := strings.Split(opts.Expect, ",")
 	for _, e := range expects {
-		if strings.HasPrefix(status, e) {
+		if strings.Contains(status, e) {
 			return e
 		}
 	}
@@ -256,7 +256,7 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 
 	statusLine := fmt.Sprintf("%s %s", res.Proto, res.Status)
 	if opts.Expect != "" {
-		m := expectedStatusCode(opts, statusLine)
+		m := expectedStatusCode(opts, res.Status)
 		if m == "" {
 			return "", &reqError{
 				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
@@ -264,6 +264,21 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 			}
 		} else {
 			matched = append(matched, fmt.Sprintf(`Status line output "%s" matched "%s"`, statusLine, opts.Expect))
+		}
+	} else {
+		switch {
+		case res.StatusCode >= 200 && res.StatusCode < 400:
+			matched = append(matched, statusLine)
+		case res.StatusCode >= 400 && res.StatusCode < 500:
+			return "", &reqError{
+				fmt.Sprintf("HTTP WARNING - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
+				WARNING,
+			}
+		default:
+			return "", &reqError{
+				fmt.Sprintf("HTTP CRITICAL - Invalid HTTP response received from host on port %d: %s", opts.Port, statusLine),
+				CRITICAL,
+			}
 		}
 	}
 
@@ -403,7 +418,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 				if opts.Verbose {
 					log.Printf("request[%d]: %s", requestNum, okMsg)
 				}
-				fmt.Println(okMsg)
+				fmt.Fprintf(output, okMsg)
 				return OK
 			} else if reqErr == nil {
 				consecutive--
@@ -436,7 +451,7 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 			if opts.Verbose {
 				log.Printf("request[%d]: %s", requestNum, okMsg)
 			}
-			fmt.Println(okMsg)
+			fmt.Fprintf(output, okMsg)
 			return OK
 		} else if reqErr == nil {
 			consecutive--
@@ -451,6 +466,6 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		case <-time.After(opts.Interim):
 		}
 	}
-	fmt.Println(reqErr.Error())
+	fmt.Fprintf(output, reqErr.Error())
 	return reqErr.Code()
 }

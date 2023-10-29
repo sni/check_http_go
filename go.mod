@@ -1,4 +1,4 @@
-module github.com/kazeburo/check_http2
+module github.com/sni/check_http_go
 
 go 1.21
 

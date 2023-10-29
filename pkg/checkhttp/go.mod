@@ -1,4 +1,4 @@
-module github.com/sni/check_http/pkg/checkhttp
+module github.com/sni/check_http_go/pkg/checkhttp
 
 go 1.21
 

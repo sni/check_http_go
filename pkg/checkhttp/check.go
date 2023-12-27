@@ -296,7 +296,7 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 	b.Write([]byte(statusLine + "\r\n\r\n"))
 	res.Header.Write(b)
 
-	okMsg := fmt.Sprintf(`HTTP OK: %s  - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matched, ", "), b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
+	okMsg := fmt.Sprintf(`HTTP OK - %s - %d bytes in %.3f second response time | time=%fs;;;0.000000 size=%dB;;;0`, strings.Join(matched, ", "), b.Size(), duration.Seconds(), duration.Seconds(), b.Size())
 	return okMsg, nil
 }
 

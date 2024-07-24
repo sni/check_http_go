@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/jessevdk/go-flags"
+	"github.com/sni/go-flags"
 )
 
 const version = "0.020"

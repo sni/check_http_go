@@ -303,6 +303,7 @@ func request(ctx context.Context, client *http.Client, opts commandOpts) (string
 func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 	opts := commandOpts{}
 	psr := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash) // default flags without flags.PrintErrors
+	psr.Name = "check_http"
 	_, err := psr.ParseArgs(osArgs)
 	if err != nil {
 		fmt.Fprintf(output, "%s\n", err.Error())

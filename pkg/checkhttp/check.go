@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"runtime"
 	"strconv"
 	"strings"
@@ -57,11 +58,12 @@ type commandOpts struct {
 	TCP6                bool          `short:"6" description:"use tcp6 only"`
 	Version             bool          `short:"V" long:"version" description:"Show version"`
 	Verbose             bool          `short:"v" long:"verbose" description:"Show verbose output"`
+	Proxy               string        `long:"proxy" description:"Proxy that should be used"`
 	bufferSize          uint64
 	expectByte          []byte
 }
 
-func makeTransport(opts commandOpts) http.RoundTripper {
+func makeTransport(opts commandOpts) (http.RoundTripper, error) {
 	baseDialFunc := (&net.Dialer{
 		Timeout:   opts.Timeout,
 		KeepAlive: 30 * time.Second,
@@ -105,9 +107,18 @@ func makeTransport(opts commandOpts) http.RoundTripper {
 		}
 	}
 
+	proxy := http.ProxyFromEnvironment
+	if opts.Proxy != "" {
+		url, err := url.Parse(opts.Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("Error while parsing Proxy URL. Error was: %s", err.Error())
+		}
+		proxy = http.ProxyURL(url)
+	}
+
 	return &http.Transport{
 		// inherited http.DefaultTransport
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 proxy,
 		DialContext:           dialFunc,
 		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   opts.Timeout,
@@ -116,7 +127,7 @@ func makeTransport(opts commandOpts) http.RoundTripper {
 		ResponseHeaderTimeout: opts.Timeout,
 		TLSClientConfig:       tlsConfig,
 		ForceAttemptHTTP2:     true,
-	}
+	}, nil
 }
 
 func buildRequest(ctx context.Context, opts commandOpts) (*http.Request, error) {
@@ -394,7 +405,12 @@ func Check(ctx context.Context, output io.Writer, osArgs []string) int {
 		opts.URI = "/"
 	}
 
-	transport := makeTransport(opts)
+	transport, err := makeTransport(opts)
+
+	if err != nil {
+		fmt.Fprintf(output, "Error in http configuration: %s\n", err.Error())
+	}
+
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
